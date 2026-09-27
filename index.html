@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google AI BG Remover (Offline)</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- MediaPipe CDNs -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/selfie_segmentation.js" crossorigin="anonymous"></script>
+    <style>
+        body {
+            background-color: #0b0f19;
+            color: #ffffff;
+            font-family: 'Inter', sans-serif;
+        }
+        .neon-glow {
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.7), 0 0 20px rgba(0, 255, 255, 0.5);
+        }
+        .neon-border {
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.3), inset 0 0 15px rgba(0, 255, 255, 0.2);
+            border: 1px solid #00ffff;
+        }
+        .neon-btn {
+            background: transparent;
+            border: 2px solid #00ffff;
+            color: #00ffff;
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.4), inset 0 0 10px rgba(0, 255, 255, 0.4);
+            transition: all 0.3s ease;
+        }
+        .neon-btn:hover:not(:disabled) {
+            background: rgba(0, 255, 255, 0.2);
+            box-shadow: 0 0 20px rgba(0, 255, 255, 0.8), inset 0 0 20px rgba(0, 255, 255, 0.5);
+        }
+        .neon-btn:disabled {
+            border-color: #374151;
+            color: #6b7280;
+            box-shadow: none;
+            cursor: not-allowed;
+        }
+        /* Checkered pattern to show transparency clearly */
+        .checkered-bg {
+            background-image: 
+                linear-gradient(45deg, #1f2937 25%, transparent 25%), 
+                linear-gradient(-45deg, #1f2937 25%, transparent 25%), 
+                linear-gradient(45deg, transparent 75%, #1f2937 75%), 
+                linear-gradient(-45deg, transparent 75%, #1f2937 75%);
+            background-size: 20px 20px;
+            background-position: 0 0, 0 10px, 10px -10px, -10px 0px;
+        }
+    </style>
+</head>
+<body class="min-h-screen flex items-center justify-center p-4">
+
+    <main class="w-full max-w-md bg-gray-900 rounded-2xl p-6 neon-border flex flex-col items-center space-y-6">
+        
+        <!-- Header -->
+        <div class="text-center">
+            <h1 class="text-2xl font-bold text-cyan-400 neon-glow tracking-wide">Google AI BG Remover</h1>
+            <span class="text-xs font-semibold text-gray-400 uppercase tracking-widest">(Offline PWA)</span>
+        </div>
+
+        <!-- File Upload Area -->
+        <label for="imageUpload" class="w-full flex flex-col items-center justify-center h-32 border-2 border-dashed border-cyan-500/50 rounded-xl cursor-pointer hover:bg-cyan-500/10 transition-colors">
+            <svg class="w-8 h-8 text-cyan-400 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"></path></svg>
+            <span class="text-sm font-medium text-cyan-200">Tap to Upload Image</span>
+            <input type="file" id="imageUpload" class="hidden" accept="image/*">
+        </label>
+
+        <!-- Hidden elements for processing -->
+        <img id="sourceImage" class="hidden" crossorigin="anonymous" alt="Source">
+
+        <!-- Status Indicator -->
+        <p id="statusText" class="text-xs text-cyan-300 h-4 animate-pulse">Initializing AI Model...</p>
+
+        <!-- Action Button -->
+        <button id="processBtn" class="neon-btn w-full py-3 rounded-xl font-bold uppercase tracking-wider text-sm" disabled>
+            Remove Background 🪄
+        </button>
+
+        <!-- Result Canvas Area -->
+        <div id="resultArea" class="w-full hidden flex-col space-y-4">
+            <div class="w-full rounded-xl overflow-hidden border border-cyan-800 checkered-bg relative">
+                <canvas id="outputCanvas" class="w-full max-h-64 object-contain block"></canvas>
+            </div>
+            
+            <button id="downloadBtn" class="w-full py-3 rounded-xl font-bold uppercase tracking-wider text-sm bg-cyan-400 text-gray-900 shadow-[0_0_15px_rgba(0,255,255,0.6)] hover:bg-cyan-300 transition-colors">
+                Download HD PNG
+            </button>
+        </div>
+
+    </main>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', async () => {
+            const imageUpload = document.getElementById('imageUpload');
+            const sourceImage = document.getElementById('sourceImage');
+            const processBtn = document.getElementById('processBtn');
+            const statusText = document.getElementById('statusText');
+            const resultArea = document.getElementById('resultArea');
+            const outputCanvas = document.getElementById('outputCanvas');
+            const downloadBtn = document.getElementById('downloadBtn');
+            const ctx = outputCanvas.getContext('2d');
+
+            let isModelReady = false;
+
+            // 1. Initialize MediaPipe Selfie Segmentation
+            const selfieSegmentation = new SelfieSegmentation({
+                locateFile: (file) => {
+                    return `https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation/${file}`;
+                }
+            });
+
+            selfieSegmentation.setOptions({
+                modelSelection: 1, // 0 for general, 1 for landscape/faster (general use)
+            });
+
+            // 2. Handle Model Results
+            selfieSegmentation.onResults((results) => {
+                // Set canvas dimensions to match original image HD
+                outputCanvas.width = sourceImage.naturalWidth;
+                outputCanvas.height = sourceImage.naturalHeight;
+                
+                ctx.save();
+                ctx.clearRect(0, 0, outputCanvas.width, outputCanvas.height);
+                
+                // Draw original image first
+                ctx.drawImage(results.image, 0, 0, outputCanvas.width, outputCanvas.height);
+                
+                // Use destination-in to mask out the background completely
+                ctx.globalCompositeOperation = 'destination-in';
+                ctx.drawImage(results.segmentationMask, 0, 0, outputCanvas.width, outputCanvas.height);
+                
+                ctx.restore();
+
+                statusText.textContent = "✨ Processing Complete!";
+                statusText.classList.remove('animate-pulse');
+                resultArea.classList.remove('hidden');
+                resultArea.classList.add('flex');
+                processBtn.disabled = false;
+                processBtn.textContent = "Remove Background 🪄";
+            });
+
+            // Pre-warm the model
+            try {
+                await selfieSegmentation.initialize();
+                isModelReady = true;
+                statusText.textContent = "AI Model Ready. Waiting for image.";
+                statusText.classList.remove('animate-pulse');
+            } catch (error) {
+                console.error(error);
+                statusText.textContent = "Error loading AI model. Check console.";
+            }
+
+            // 3. Handle File Upload
+            imageUpload.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                const url = URL.createObjectURL(file);
+                
+                sourceImage.onload = () => {
+                    if (isModelReady) {
+                        processBtn.disabled = false;
+                        statusText.textContent = "Image loaded. Ready to process.";
+                    }
+                    resultArea.classList.add('hidden');
+                    resultArea.classList.remove('flex');
+                };
+                
+                sourceImage.src = url;
+            });
+
+            // 4. Trigger Segmentation
+            processBtn.addEventListener('click', async () => {
+                if (!sourceImage.src || !isModelReady) return;
+                
+                processBtn.disabled = true;
+                processBtn.textContent = "Processing...";
+                statusText.textContent = "Segmenting pixels locally...";
+                statusText.classList.add('animate-pulse');
+                resultArea.classList.add('hidden');
+                
+                // Delay slightly to allow UI repaint before blocking main thread
+                setTimeout(async () => {
+                    try {
+                        await selfieSegmentation.send({image: sourceImage});
+                    } catch (err) {
+                        console.error(err);
+                        statusText.textContent = "Error during segmentation.";
+                        processBtn.disabled = false;
+                        processBtn.textContent = "Remove Background 🪄";
+                    }
+                }, 50);
+            });
+
+            // 5. Download output canvas as HD PNG
+            downloadBtn.addEventListener('click', () => {
+                const link = document.createElement('a');
+                link.download = `bg-removed-${Date.now()}.png`;
+                link.href = outputCanvas.toDataURL('image/png', 1.0);
+                link.click();
+            });
+        });
+    </script>
+</body>
+</html>
